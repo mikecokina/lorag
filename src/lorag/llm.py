@@ -1,4 +1,5 @@
-from typing import Tuple, Dict, Text
+import re
+from typing import Tuple, Dict, Text, List
 
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedTokenizerBase, GemmaForCausalLM
@@ -83,12 +84,29 @@ def get_model_mem_size(model: GemmaForCausalLM) -> Dict:
     }
 
 
+def strip_question(text: Text) -> Text:
+    pattern = r"(?<=<start_of_turn>model)(.*)"
+
+    match = re.search(pattern, text, flags=re.DOTALL)
+    result = text
+    if match:
+        result = match.group(1).strip()
+        result = result.replace("<eos>", "").replace("<bos>", "")
+    return result
+
+
 def generate_text(
         text: Text,
         model: GemmaForCausalLM,
         tokenizer: PreTrainedTokenizerBase,
+        max_new_tokens: int = 256,
+        temperature: float = 0.7,
+        do_sample: bool = False,
+        answer_only: bool = False,
         device: str = 'cuda'
 ) -> Text:
+
+    temperature = temperature if do_sample else 1.0
     dialog_template = [
         {
             "role": "user",
@@ -109,24 +127,52 @@ def generate_text(
 
     output_tokens = model.generate(
         **tokenized,
-        max_new_tokens=256
+        max_new_tokens=max_new_tokens,
+        temperature=temperature,  # creativity of model, higher number, more creative
+        do_sample=do_sample  # use or not sampling - take next generated token or make choise of others in row
     )
 
     text = tokenizer.decode(output_tokens.to(device)[0])
 
+    if answer_only:
+        text = strip_question(text)
+
     return text
 
 
-if __name__ == '__main__':
-    model_, tokenizer_ = get_llm_model(
-        device='cuda'
-    )
-    params_ = get_model_num_parameters(model_)
-    size_ = get_model_mem_size(model_)
+def prompt_augmentation(query: Text, context: List[Text]) -> Text:
+    context = "- " + "\n- ".join(context)
 
-    result = generate_text(
-        text="What are the macronutrients, and what roles do they play in the human body?",
-        model=model_,
-        tokenizer=tokenizer_,
-        device='cuda'
-    )
+    aug_prompt = f"""Based on following context items, please answer the query.
+Give yourself a room to think by extracting relevant passages from the context before answering the query.
+Don't return the thinking, only return the answer.
+Make sure your answers are as explanatory as possible.
+Use the following examples as reference for the ideal answer style.
+\nExample 1: 
+Query: What are the fat-soluble vitamins?
+Answer: The fat-soluble vitamins include Vitamin A, Vitamin D, Vitamin E, and Vitamin K. 
+These vitamins are absorbed along with fats in the diet and can be stored in the body's fatty tissue and 
+liver for later use. Vitamin A is important for vision, immune function, and skin health. 
+Vitamin D plays a critical role in calcium absorption and bone health. Vitamin E acts as an antioxidant, 
+protecting cells from damage. Vitamin K is essential for blood clotting and bone metabolism.
+\nExample 2:
+Query: What are the causes of type 2 diabetes?
+Answer: Type 2 diabetes is often associated with overnutrition, particularly the overconsumption of 
+calories leading to obesity. Factors include a diet high in refined sugars and saturated fats, 
+which can lead to insulin resistance, a condition where the body's cells do not respond effectively to insulin. 
+Over time, the pancreas cannot produce enough insulin to manage blood sugar levels, resulting in type 2 diabetes. 
+Additionally, excessive caloric intake without sufficient physical activity exacerbates the risk by promoting weight 
+gain and fat accumulation, particularly around the abdomen, further contributing to insulin resistance.
+\nExample 3:
+Query: What is the importance of hydration for physical performance?
+Answer: Hydration is crucial for physical performance because water plays key roles in maintaining blood volume, 
+regulating body temperature, and ensuring the transport of nutrients and oxygen to cells. Adequate hydration is 
+essential for optimal muscle function, endurance, and recovery. Dehydration can lead to decreased performance, 
+fatigue, and increased risk of heat-related illnesses, such as heat stroke. Drinking sufficient water before, during, 
+and after exercise helps ensure peak physical performance and recovery.
+\nNow use the following context items to answer the user query:
+{context}
+\nRelevant passages: <extract relevant passages from the context here>
+User query: {query}
+Answer:"""
+    return aug_prompt
