@@ -16,7 +16,6 @@ def ask(
     df = utils.read_embed_df(embeddings_path)
     embeddings_matrix = utils.df_to_embeddings_matrix(df)
 
-    query = "What are the macronutrients, and what roles do they play in the human body?"
     sem_res = search.semantic_search(
         query=query,
         embeddings=embeddings_matrix,
